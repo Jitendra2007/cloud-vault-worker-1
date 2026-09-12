@@ -12,12 +12,6 @@
     "timestamp": "2026-09-06 14:04:11 UTC"
   },
   {
-    "story": "Dark Tide Express",
-    "vault_channel_id": "-1003516689720",
-    "total_episodes": 848,
-    "timestamp": "2026-09-07 04:00:00 UTC"
-  },
-  {
     "story": "Diana's Defense",
     "vault_channel_id": "-1004438136719",
     "total_episodes": 272,
@@ -52,5 +46,11 @@
     "vault_channel_id": "-1004306757702",
     "total_episodes": 757,
     "timestamp": "2026-09-11 16:52:45 UTC"
+  },
+  {
+    "story": "Dark Tide Express",
+    "vault_channel_id": "-1003516689720",
+    "total_episodes": 848,
+    "timestamp": "2026-09-12 04:42:21 UTC"
   }
 ]
