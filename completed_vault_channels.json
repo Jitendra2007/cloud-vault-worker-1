@@ -1,11 +1,5 @@
 [
   {
-    "story": "God Eye",
-    "vault_channel_id": "-1004438136719",
-    "total_episodes": 1478,
-    "timestamp": "2026-09-06 11:39:00 UTC"
-  },
-  {
     "story": "Accidentally Yours",
     "vault_channel_id": "-1004465718365",
     "total_episodes": 724,
@@ -58,5 +52,11 @@
     "vault_channel_id": "-1003533875902",
     "total_episodes": 560,
     "timestamp": "2026-09-12 04:37:54 UTC"
+  },
+  {
+    "story": "God Eye",
+    "vault_channel_id": "-1004438136719",
+    "total_episodes": 1478,
+    "timestamp": "2026-09-13 13:36:58 UTC"
   }
 ]
