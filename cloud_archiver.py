@@ -82,23 +82,29 @@ def parse_ep_range(range_str):
     return None, None
 
 def parse_ep_num(text):
-    s = str(text)
-    m = re.search(r'(?:ep|episode|chapter)\s*[-_–:\s]*(\d+)', s, re.IGNORECASE)
-    if m:
-        return int(m.group(1))
-    m2 = re.search(r'(?:GE|DD|LotB|TOR|LB|RotB|BSSIL|MAS|TEP|[A-Za-z]{2,6})\s*[-_–:\s]*(\d+)', s, re.IGNORECASE)
+    if not text:
+        return None
+    s = str(text).strip()
+    m1 = re.search(r'(?:ep|episode|chapter|ch|track)[_–:\.\s]*(\d+)', s, re.IGNORECASE)
+    if m1:
+        return int(m1.group(1))
+    m_e = re.search(r'\bE[_–:\.\s]*(\d+)', s, re.IGNORECASE)
+    if m_e:
+        return int(m_e.group(1))
+    m2 = re.search(r'(?:GE|DD|LotB|TOR|LB|RotB|BSSIL|MAS|TEP|SS|SM|FC|HH|PFM)[_–:\.\s]*(\d+)', s, re.IGNORECASE)
     if m2:
         return int(m2.group(1))
-    m3 = re.search(r'^\s*(\d+)\s*[-_–.]', s)
+    m3 = re.search(r'\[(\d+)\]', s)
     if m3:
         return int(m3.group(1))
-    m4 = re.search(r'\[(\d+)\]', s)
+    m4 = re.search(r'^\s*(\d+)\s*[-_–.\s]', s)
     if m4:
         return int(m4.group(1))
     m5 = re.search(r'\b(\d+)\b', s)
     if m5 and 1 <= int(m5.group(1)) <= 15000:
         return int(m5.group(1))
     return None
+
 
 def clean_audio_title(raw_title):
     if not raw_title:
@@ -182,23 +188,21 @@ async def harvest_from_bot(harvester_client, vault_client, bot_username, start_t
                 await asyncio.sleep(fwe.seconds + 5)
             retried = True
 
-        # If at least 1 track arrived and count is stable for 3 polls (6s), proceed immediately
+        # If expected_count > 0 and we reached full count, exit immediately
+        if expected_count > 0 and len(audio_messages) >= expected_count:
+            break
+
+        # Only allow stable_polls exit if expected_count == 0 or if we reached expected_count
         if len(audio_messages) > 0 and len(audio_messages) == prev_len:
             stable_polls += 1
-            if stable_polls >= 3:
+            if expected_count > 0 and len(audio_messages) >= expected_count and stable_polls >= 2:
+                break
+            elif expected_count == 0 and stable_polls >= 5:
                 break
         else:
             stable_polls = 0
             prev_len = len(audio_messages)
 
-        if len(audio_messages) > 0 and len(audio_messages) == prev_len:
-            stable_polls += 1
-            threshold = 2 if (expected_count > 0 and len(audio_messages) >= expected_count) else 5
-            if stable_polls >= threshold:
-                break
-        else:
-            stable_polls = 0
-            prev_len = len(audio_messages)
 
     # Dual-Account Fallback: If primary account got 0 tracks or fewer than expected, use secondary account
     if (len(audio_messages) == 0 or (expected_count > 0 and len(audio_messages) < expected_count)) and harvester_client != vault_client:
