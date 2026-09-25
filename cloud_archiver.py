@@ -72,7 +72,10 @@ if not HARVESTER_SESSION:
 if not HARVESTER_SESSION:
     HARVESTER_SESSION = VAULT_SESSION
 
-WORKER_ID = int(os.environ.get('WORKER_ID', 1))
+try:
+    WORKER_ID = int(os.environ.get('WORKER_ID', 1))
+except Exception:
+    WORKER_ID = 1
 
 def parse_bot_link(bot_url):
     m = re.search(r'(?:telegram\.me|t\.me)/([A-Za-z0-9_]+)\?start=([A-Za-z0-9_%+/=\-]+)', str(bot_url), re.IGNORECASE)
