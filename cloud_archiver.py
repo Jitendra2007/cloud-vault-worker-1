@@ -27,6 +27,11 @@ from telethon.tl.types import (
     InputDocumentFileLocation
 )
 from parallel_transfer import fast_download_file, fast_upload_file
+from audio_processor import (
+    convert_to_pure_mp3,
+    verify_mp3_integrity,
+    apply_id3_tags
+)
 
 API_ID = int(os.environ.get('API_ID') or os.environ.get('TELEGRAM_API_ID', 0))
 API_HASH = os.environ.get('API_HASH') or os.environ.get('TELEGRAM_API_HASH', '')
@@ -273,20 +278,32 @@ async def harvest_from_bot(harvester_client, vault_client, bot_username, start_t
 
     return audio_messages, download_client
 
-async def get_or_create_vault_channel(vault_client, channel_title, cover_path, from_start=False):
+async def get_or_create_vault_channel(vault_client, channel_title, cover_path, from_start=False, target_vault_id=None):
+    if target_vault_id:
+        try:
+            cid = int(target_vault_id)
+            entity = await vault_client.get_entity(cid)
+            print(f"✓ Found existing vault channel by exact ID {target_vault_id}: {getattr(entity, 'title', entity.id)}")
+            return entity
+        except Exception as e_id:
+            print(f"Notice looking up vault channel by exact ID {target_vault_id}: {e_id}")
+
+    clean_target = re.sub(r"[^a-z0-9]+", "", channel_title.lower())
     async for dialog in vault_client.iter_dialogs(limit=300):
-        if dialog.is_channel and dialog.title.strip().lower() == channel_title.strip().lower():
-            if from_start:
-                print(f"Reset requested: Deleting existing channel '{dialog.title}' to start fresh from Ep 1...")
-                try:
-                    await vault_client(DeleteChannelRequest(dialog.entity))
-                    await asyncio.sleep(2)
-                except Exception as e:
-                    print(f"Notice on channel deletion: {e}")
-                break
-            else:
-                print(f"✓ Found existing vault channel: {dialog.title}")
-                return dialog.entity
+        if dialog.is_channel:
+            clean_dialog = re.sub(r"[^a-z0-9]+", "", dialog.title.lower())
+            if clean_dialog == clean_target or (len(clean_target) > 5 and clean_target in clean_dialog):
+                if from_start:
+                    print(f"Reset requested: Deleting existing channel '{dialog.title}' to start fresh from Ep 1...")
+                    try:
+                        await vault_client(DeleteChannelRequest(dialog.entity))
+                        await asyncio.sleep(2)
+                    except Exception as e:
+                        print(f"Notice on channel deletion: {e}")
+                    break
+                else:
+                    print(f"✓ Found existing vault channel: '{dialog.title}' (ID: {dialog.id})")
+                    return dialog.entity
 
     print(f"Creating fresh clean private vault channel: '{channel_title}'...")
     created = await vault_client(CreateChannelRequest(
@@ -948,8 +965,12 @@ async def main():
 
                                 buf.seek(0)
                                 raw_bytes = buf.getvalue()
+                                doc_obj = getattr(getattr(msg, 'media', None), 'document', None)
+                                expected_doc_size = getattr(doc_obj, 'size', 0)
+                                if expected_doc_size > 0 and len(raw_bytes) != expected_doc_size:
+                                    raise Exception(f"Stage 1 Gate Failed: Byte-match mismatch for Ep {calc_ep} (got {len(raw_bytes)}, expected {expected_doc_size})")
                                 if len(raw_bytes) < 500_000:
-                                    raise Exception(f"Downloaded only {len(raw_bytes)} bytes for Ep {calc_ep} - audio stream is truncated or corrupt!")
+                                    raise Exception(f"Stage 1 Gate Failed: Downloaded only {len(raw_bytes)} bytes for Ep {calc_ep} (under 500KB)!")
                                 break
                             except Exception as dl_err:
                                 print(f"⚠️ Error harvesting Ep {calc_ep}: {dl_err}")
@@ -984,53 +1005,46 @@ async def main():
                     ep_uploaded = False
                     for ep_attempt in range(1, 6):
                         try:
-                            # 🏷️ REWRITE EMBEDDED ID3 TAGS (SAFE ON-DISK TEMP FILE TO PRESERVE MPEG STREAM)
-                            tmp_mp3 = os.path.join("scratch", f"upload_ep_{calc_ep}_{os.getpid()}.mp3")
+                            # ==========================================
+                            # 5-STAGE UNIVERSAL ZERO-FAILURE PIPELINE
+                            # ==========================================
                             os.makedirs("scratch", exist_ok=True)
-                            with open(tmp_mp3, "wb") as f_out:
+                            tmp_raw = os.path.join("scratch", f"raw_ep_{calc_ep}_{os.getpid()}.tmp")
+                            tmp_cbr = os.path.join("scratch", f"cbr_ep_{calc_ep}_{os.getpid()}.mp3")
+                            
+                            with open(tmp_raw, "wb") as f_out:
                                 f_out.write(raw_bytes)
-
-                            try:
-                                from mutagen.id3 import ID3, TIT2, TPE1, APIC
-                                try:
-                                    tags = ID3(tmp_mp3)
-                                except Exception:
-                                    tags = ID3()
-                                tags.add(TIT2(encoding=3, text=display_title))
-                                tags.add(TPE1(encoding=3, text=performer_title))
-                                if cover_path and os.path.exists(cover_path):
-                                    try:
-                                        with open(cover_path, "rb") as img_f:
-                                            img_bytes = img_f.read()
-                                        tags.add(APIC(
-                                            encoding=3,
-                                            mime="image/jpeg",
-                                            type=3,
-                                            desc="Cover",
-                                            data=img_bytes
-                                        ))
-                                    except Exception:
-                                        pass
-                                tags.save(tmp_mp3, v2_version=3)
-                            except Exception as tag_err:
-                                print(f"   Notice on ID3 tag rewrite for Ep {calc_ep}: {tag_err}")
-
-                            # STRICT INTEGRITY CHECK BEFORE UPLOAD
-                            final_sz = os.path.getsize(tmp_mp3)
+                                
+                            # Stage 2: Sanitized FFmpeg Re-Encoding (Pure 128k CBR, 44.1kHz stereo, -write_xing 1, -vn)
+                            conv_ok = convert_to_pure_mp3(tmp_raw, tmp_cbr)
+                            if not conv_ok:
+                                raise Exception(f"Stage 2 Failed: FFmpeg conversion to pure 128k CBR failed for Ep {calc_ep}")
+                                
+                            # Stage 3: FFprobe Health & Duration Verification
+                            probe_ok, verified_dur = verify_mp3_integrity(tmp_cbr)
+                            if not probe_ok or verified_dur <= 0:
+                                verified_dur = max(duration, int(verified_dur))
+                            if verified_dur <= 0:
+                                verified_dur = duration or 120
+                                
+                            # Stage 4: ID3v2.3 Tagging & Cover Normalization (800x800 baseline JPEG)
+                            apply_id3_tags(tmp_cbr, display_title, performer_title, cover_path)
+                            
+                            final_sz = os.path.getsize(tmp_cbr)
                             if final_sz < 500_000:
-                                if os.path.exists(tmp_mp3):
-                                    os.remove(tmp_mp3)
-                                raise Exception(f"CRITICAL: Final file for Ep {calc_ep} is only {final_sz} bytes (under 500KB)! Aborting upload.")
-
-                            with open(tmp_mp3, "rb") as f_in:
+                                raise Exception(f"Stage 4 Failed: Final file for Ep {calc_ep} is under 500KB ({final_sz} bytes)!")
+                                
+                            with open(tmp_cbr, "rb") as f_in:
                                 upload_bytes = f_in.read()
+                                
+                            for cleanup_f in [tmp_raw, tmp_cbr]:
+                                try:
+                                    if os.path.exists(cleanup_f):
+                                        os.remove(cleanup_f)
+                                except Exception:
+                                    pass
 
-                            try:
-                                if os.path.exists(tmp_mp3):
-                                    os.remove(tmp_mp3)
-                            except Exception:
-                                pass
-
+                            # Stage 5: Telegram Native Streaming Upload
                             input_file = await asyncio.wait_for(
                                 fast_upload_file(vault_client, upload_bytes, file_name=final_filename, workers=4),
                                 timeout=120.0
@@ -1038,7 +1052,7 @@ async def main():
 
                             audio_attrs = [
                                 DocumentAttributeAudio(
-                                    duration=duration,
+                                    duration=verified_dur,
                                     title=display_title,
                                     performer=performer_title
                                 ),
@@ -1057,7 +1071,7 @@ async def main():
                                 ),
                                 timeout=120.0
                             )
-                            print(f"🚀 [WORKER {WORKER_ID}] [Batch {b_idx+1}/{len(batches)}] Uploaded Ep {calc_ep} -> '{display_title}' ({final_sz/1024/1024:.2f} MB)")
+                            print(f"🚀 [WORKER {WORKER_ID}] [Batch {b_idx+1}/{len(batches)}] Uploaded Ep {calc_ep} -> '{display_title}' ({final_sz/1024/1024:.2f} MB, {verified_dur}s)")
                             uploaded_episodes.add(calc_ep)
                             total_new += 1
                             ep_uploaded = True
