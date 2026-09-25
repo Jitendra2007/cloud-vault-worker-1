@@ -1,0 +1,50 @@
+name: Shadow Slave Migration
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: shadow-slave-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Forward Shadow Slave OLD to NEW
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install telethon cryptg
+
+      - name: Run Shadow Slave Migration
+        env:
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+          VAULT_SESSION: ${{ secrets.TELEGRAM_STRING_SESSION_VAULT }}
+        run: |
+          python -u shadow_slave_migrate_cloud.py
+
+      - name: Save Progress
+        if: always()
+        run: |
+          git config --global user.name "Cloud Vault Worker 1"
+          git config --global user.email "worker1@vault.ai"
+          git pull origin main --rebase || true
+          if [ -f "shadow_slave_cloud_progress.json" ]; then
+            git add shadow_slave_cloud_progress.json
+            git commit -m "Shadow Slave migration progress [skip ci]" || true
+            git push origin main || true
+          fi
